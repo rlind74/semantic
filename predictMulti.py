@@ -15,6 +15,26 @@ from unet import UNet
 from data_vis import plot_img_and_mask
 from dataset import BasicDataset
 
+# python3 predictMulti.py --model checkpoints_WF_adult_large_small_with_aphids_warmRestarts/CP_epoch25.pth  --input /home/rob/Pictures/LesBargefieldstation/FullSize/*.jpg --scale 1 --mask-threshold 0.65 --path /home/rob/Pictures/LesBargefieldstation/FullSize/
+
+def get_mask(net_output, resize) :
+    probs = net_output  # we removed the extra sigmoid
+
+    probs = probs.squeeze(0)
+
+
+    tf = transforms.Compose(
+        [
+            transforms.ToPILImage(),
+            transforms.Resize(resize),
+            transforms.ToTensor()
+        ]
+    )
+
+    probs = tf(probs.cpu())
+    full_mask = probs.squeeze().cpu().numpy()
+
+    return full_mask
 
 def predict_img(net,
                 full_img,
@@ -28,23 +48,24 @@ def predict_img(net,
     img = img.unsqueeze(0)
     img = img.to(device=device, dtype=torch.float32)
 
-    with torch.no_grad():
-        output = net(img)
+    img_size = img.size()
+    print(img_size)
+    crop_number = 10
+    img_size = (img_size[2], img_size[3]) # height and width as tuple
+    if img_size[0]>2048 and img_size[1]>2048 :
+        full_mask = torch.zeros(img.size())
+        crop_x = img_size[0]//crop_number # a double // converts to an int from the double
+        print(img_size)
+        crop_y = img_size[1]//crop_number
+        with torch.no_grad():
+            for x in range(crop_number) :
+                for y in range(crop_number) :
+                    #print(str(crop_x))
+                    full_mask[:,:,x*crop_x : x*crop_x+crop_x, y*crop_y : y*crop_y+crop_y] = net(img[:,:,x*crop_x : x*crop_x+crop_x, y*crop_y : y*crop_y+crop_y] )
+    else :
+        full_mask = net(img)
 
-        probs = output # we removed the extra sigmoid
-
-        probs = probs.squeeze(0)
-
-        tf = transforms.Compose(
-            [
-                transforms.ToPILImage(),
-                transforms.Resize(full_img.size[1]),
-                transforms.ToTensor()
-            ]
-        )
-
-        probs = tf(probs.cpu())
-        full_mask = probs.squeeze().cpu().numpy()
+    full_mask= get_mask(full_mask, full_img.size[1])
 
     print(full_mask.max())
     return full_mask
@@ -132,6 +153,12 @@ if __name__ == "__main__":
         if not args.no_save:
             out_fn = out_files[i]
 
+            # get mask dimensions for rgb output image
+            arrayWidth = mask.shape[1]
+            arrayHeight = mask.shape[2]
+
+            # make output rgb to be filled with mask channels
+            result_rgb = Image.new("RGB", [arrayWidth, arrayHeight], 255)
             
             result_r = mask_to_image(mask[0,:,:])
             result_g = mask_to_image(mask[1,:,:])
@@ -139,6 +166,11 @@ if __name__ == "__main__":
             result_r.save(out_files[i] + '0.png')
             result_g.save(out_files[i] + '1.png')
             result_b.save(out_files[i] + '2.png')
+
+            # use the split and merge commands to unpack and pack rgb images
+            result_rgb = Image.merge('RGB', (result_r, result_g, result_b))
+
+            result_rgb.save(out_files[i] + 'ALL.png') # save out rgb mask
 
             logging.info("Mask saved to {}".format(out_files[i]))
 
